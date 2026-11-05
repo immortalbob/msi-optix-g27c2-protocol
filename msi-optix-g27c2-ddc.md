@@ -126,7 +126,9 @@ Consequences:
 - A host cannot learn the supported codes from the monitor. It must use a known list (section 4) and probe codes
   one by one.
 - Probe only the codes listed here. Scanning every VCP code blindly can change settings, black the screen or stop
-  DDC/CI until a power cycle on some monitors (**PUBLISHED**, Microsoft PowerToys' Power Display documentation).
+  DDC/CI until a power cycle on some monitors (**PUBLISHED**, Microsoft PowerToys' Power Display documentation). On
+  this unit a read-only scan of `0x02`-`0xFF` that skipped the MCCS write-only controls went through without any
+  visible effect (OBSERVED 2026-11-04, section 4.4); reads of other codes stay at the reader's risk.
 - The MCCS version is still readable: `0xDF` returns `0x0201` = MCCS 2.1 (OBSERVED 2026-11-02 05:19).
 
 ## 4. VCP codes
@@ -188,9 +190,48 @@ Scanned once, read-only, on 2026-11-02 at 05:19:59 with the colour preset on Coo
 | I2C error (inconclusive) | `0xDC`, `0xE2`, `0xE3`, `0xE6`, `0xE7`, `0xF0`, `0xF7`, `0xF8`, `0xFA`, `0xFD`, `0xFE` |
 
 No code in the range changed with the colour preset, so there is no hidden colour control there (OBSERVED within the
-limits of one scan). The inconclusive codes were not re-read. `0xEF` also answered "not supported" in a separate read
-on 2026-11-01 (OBSERVED). No manufacturer code of this model is documented anywhere public (**PUBLISHED**: by
-absence).
+limits of one scan). The inconclusive codes were re-read on 2026-11-04 (section 4.4): all "not supported" except
+`0xDC`. `0xEF` also answered "not supported" in a separate read on 2026-11-01 (OBSERVED). No manufacturer code of this
+model is documented anywhere public (**PUBLISHED**: by absence).
+
+### 4.4 Every code that answers (OBSERVED 2026-11-04, 16:57 to 17:02)
+
+A read-only scan of `0x02` to `0xFF` with up to three tries per code (80 ms between reads), skipping the MCCS
+write-only controls (`0x04`-`0x0A`, `0xB0`) and the ASUS command codes; then two snapshots of the answering codes
+17 s apart, identical for every code that answered in both (39 of 47). **47 codes answer**, 32 more than section 4.1
+listed. The new ones:
+
+| Code | MCCS name | Value read (current of maximum) | Note |
+|---|---|---|---|
+| `0x02` | new control value | `0x0002` of `0x00FF` | MCCS "no new control values" |
+| `0x13` | backlight control | `0x03E1` of `0x0064` | the current value exceeds the maximum: not a plain level; meaning UNKNOWN |
+| `0x17` | user colour vision compensation | `0x0001` of `0x0064` | UNKNOWN |
+| `0x22`, `0x24`, `0x25`, `0x26`, `0x29` | CRT geometry codes in MCCS | `1`, `4`, `2`, `2`, `0x0F`, each of `0xFFFF` | a flat panel has no such geometry: INFERRED to be MSI's own settings under standard numbers (OSD candidates) |
+| `0x51`, `0x55`, `0x56`, `0x57` | reserved in MCCS 2.1 | `0x32`, `0x32`, `1`, `0`, each of `0xFFFF` | INFERRED: MSI's own settings (OSD candidates) |
+| `0x52` | active control | `0` of `0xFF` | |
+| `0x68`, `0x69` | (not in MCCS 2.1) | `0x0780` (1920), `0x0438` (1080) | the panel's width and height (INFERRED from the values) |
+| `0x8D` | audio mute | `2` of `2` | not muted |
+| `0xAC` | horizontal frequency | `0x07AC` of `0xFF01` | |
+| `0xAE` | vertical frequency | `0x177A` of `0xFFFF` | 6010 in 0.01 Hz = 60.1 Hz at the time of the scan (the signal, not the maximum refresh rate) |
+| `0xB2` | flat panel sub-pixel layout | `1` of `8` | RGB vertical stripe |
+| `0xB6` | display technology type | `3` of `4` | LCD (TFT) |
+| `0xC0` | display usage time | `0x6FF5` | 28661 hours |
+| `0xC6` | application enable key | `0x006F` | |
+| `0xC8` | display controller id | `0x0012` | |
+| `0xC9` | firmware level | `0x0220` | |
+| `0xCA` | OSD | `2` of `2` | OSD enabled |
+| `0xCC` | OSD language | `2` of `0xFF` | English in MCCS numbering |
+| `0xDC` | display application | `4` of `5` | an OSD mode selector: INFERRED, the strongest candidate for MSI's Game or Pro mode |
+
+Errors in the scan: `0x15` returned `ERROR_GRAPHICS_DDCCI_INVALID_DATA` (`0xC0262585`) on every try; `0x45` the I2C
+transmit error on all three tries; `0x5B` and `0xBE` `ERROR_GRAPHICS_DDCCI_INVALID_MESSAGE_COMMAND` (`0xC0262589`).
+The last two errors are not final answers: in the snapshots `0x68`, `0x69`, `0xAC` and `0xB6` produced the same
+`0xC0262589` once each and answered on another try, so **every error except "not supported" is worth a retry on this
+monitor** (OBSERVED). Every other code in `0x02`-`0xFF` answered "not supported" at once.
+
+What these codes mean on the OSD is not yet known: the OSD-correlation rounds (one menu item changed at a time, the
+47 codes read before and after) were prepared but not run. Candidates for MSI's own settings are `0xDC`, `0x13`,
+`0x17`, `0x22`-`0x29`, `0x51`, `0x55`-`0x57`, `0xE1` and `0xFF`.
 
 ## 5. Writes
 
@@ -292,8 +333,8 @@ section 4):
 | 1 | Input numbers for the two HDMI ports | read `0x60` with the PC connected through each HDMI port |
 | 2 | Whether `0x0C` (colour temperature request) or other `0x14` values can be written | one write each, owner watching the OSD |
 | 3 | Whether the gains `0x16`/`0x18`/`0x1A` can be written in the User preset | as item 2 |
-| 4 | What `0x6C`/`0x6E`/`0x70`, `0xE1` and `0xFF` control | change OSD items one at a time and re-read |
-| 5 | The codes that gave an I2C error in the `0xE0`-`0xFF` scan | re-read them with retries |
+| 4 | What `0x6C`/`0x6E`/`0x70`, `0xE1`, `0xFF` and the 32 codes of section 4.4 control (`0xDC`, `0x13`, `0x17`, `0x22`-`0x29`, `0x51`, `0x55`-`0x57` first) | change OSD items one at a time (Game Mode, Response Time, Zero Latency, Refresh Rate display, Alarm Clock, FreeSync, Pro Mode, Eye Saver, HDCR, Image Enhancement, Sharpness, Screen Size, Language, Transparency, OSD Time Out, Power Button, Navi Key) and re-read the 47 codes |
+| 5 | ~~The codes that gave an I2C error in the `0xE0`-`0xFF` scan~~ **settled 2026-11-04** (section 4.4): all "not supported" except `0xDC`; `0x15` and `0x45` are the only codes without a clean answer | |
 | 6 | Whether written brightness and contrast survive a power-button off and on | write, power-cycle the monitor, read |
 | 7 | Whether the monitor answers DDC/CI while another input is active | switch inputs in the OSD and read |
 | 8 | Volume (`0x62`) and mute behaviour with headphones | write with headphones connected |
